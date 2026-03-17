@@ -3,7 +3,7 @@ import { FileText, BrainCircuit, Trash2, Loader2, ChevronRight, BookOpen, Sparkl
 import Markdown from 'react-markdown';
 import { PaperAnalysis } from './types';
 import { getStoredLibrary, saveLibrary } from './lib/libraryStorage';
-import { chatWithLibrary, getDemoLibrary, searchPublicPapers, synthesizeDomain } from './services/researchService';
+import { analyzeUploadedPdf, chatWithLibrary, getDemoLibrary, searchPublicPapers, synthesizeDomain } from './services/researchService';
 import { cn } from './lib/utils';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import ForceGraph2D from 'react-force-graph-2d';
@@ -11,6 +11,7 @@ import ForceGraph2D from 'react-force-graph-2d';
 export default function App() {
   const [papers, setPapers] = useState<PaperAnalysis[]>(() => getStoredLibrary());
   const [activeTab, setActiveTab] = useState<'papers' | 'metadata' | 'gaps' | 'synthesis' | 'chat' | 'graph'>('papers');
+  const [isUploadingPdf, setIsUploadingPdf] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [synthesisResult, setSynthesisResult] = useState<string | null>(null);
@@ -20,6 +21,7 @@ export default function App() {
   const [discoverQuery, setDiscoverQuery] = useState('transformer attention');
   const [discoverResults, setDiscoverResults] = useState<PaperAnalysis[]>([]);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   
   // Search and Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -31,6 +33,7 @@ export default function App() {
   const [isChatting, setIsChatting] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -82,6 +85,36 @@ export default function App() {
     setSynthesisResult(null);
     setDiscoverResults([]);
     setDiscoverError(null);
+    setUploadError(null);
+  };
+
+  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setIsUploadingPdf(true);
+    setUploadError(null);
+
+    try {
+      const uploadedPaper = await analyzeUploadedPdf(file);
+      mergePapers([uploadedPaper]);
+      setSelectedPaperId(uploadedPaper.id);
+      setActiveTab('papers');
+      setSynthesisResult(null);
+      setDiscoverResults([]);
+      setDiscoverError(null);
+      setIsMobileMenuOpen(false);
+    } catch (error) {
+      console.error('Error analyzing PDF:', error);
+      setUploadError('Could not read this PDF. Try another file, or use import/export for prepared data.');
+    } finally {
+      setIsUploadingPdf(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
   };
 
   const handleDiscoverPapers = async () => {
@@ -96,6 +129,7 @@ export default function App() {
       const existingIds = new Set(papers.map((paper) => paper.id));
       setDiscoverResults(results.filter((paper) => !existingIds.has(paper.id)));
       setActiveTab('papers');
+      setUploadError(null);
     } catch (error) {
       console.error('Error fetching public papers:', error);
       setDiscoverError('Could not fetch papers right now. Please try another topic or load the demo library.');
@@ -252,7 +286,7 @@ export default function App() {
 
       {/* Sidebar */}
       <div className={cn(
-        "fixed md:static inset-y-0 left-0 w-full max-w-[22rem] md:max-w-none md:w-[22rem] xl:w-[24rem] shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-xl md:shadow-none z-40 transition-transform duration-300 ease-in-out md:translate-x-0",
+        "fixed md:static inset-y-0 left-0 h-[100dvh] max-h-[100dvh] w-full max-w-[22rem] shrink-0 overflow-hidden bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-xl md:h-auto md:max-h-none md:max-w-none md:w-[22rem] md:shadow-none z-40 transition-transform duration-300 ease-in-out md:translate-x-0 xl:w-[24rem]",
         isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="flex p-6 border-b border-slate-100 dark:border-slate-800 justify-between items-start">
@@ -273,11 +307,12 @@ export default function App() {
           </div>
         </div>
 
+        <div className="flex-1 overflow-y-auto overscroll-contain pb-4">
         <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800">
           <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 px-4 py-3">
             <p className="text-sm font-medium text-slate-900 dark:text-slate-100">Showcase mode</p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              No sign-in or private API keys. Load the demo library, fetch public paper metadata from Crossref, or use JSON import/export.
+              No sign-in or private API keys. Upload PDFs locally, fetch public paper metadata from Crossref, load the demo library, or use JSON import/export.
             </p>
           </div>
         </div>
@@ -365,7 +400,7 @@ export default function App() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 pt-0">
+        <div className="px-4 pb-4">
           {activeTab === 'papers' && (
             <div className="space-y-4">
               <div className="space-y-2">
@@ -455,7 +490,7 @@ export default function App() {
               </div>
               {filteredPapers.length === 0 ? (
                 <div className="text-sm text-slate-500 dark:text-slate-400 text-center py-8 px-4 border border-dashed border-slate-200 dark:border-slate-700 rounded-xl">
-                  {papers.length === 0 ? "No papers yet. Load the demo library, fetch Crossref results, or import JSON to begin." : "No papers match your search."}
+                  {papers.length === 0 ? "No papers yet. Upload a PDF, load the demo library, fetch Crossref results, or import JSON to begin." : "No papers match your search."}
                 </div>
               ) : (
                 filteredPapers.map(paper => (
@@ -506,16 +541,44 @@ export default function App() {
           )}
         </div>
 
-        <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 space-y-3">
+        <div className="mx-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 space-y-3 pt-4">
           <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Discover papers</p>
+                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Add papers</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  Search Crossref for public research metadata and add matching papers to the showcase library.
+                  Upload a PDF for local extraction, search Crossref for public metadata, or load the demo showcase set.
                 </p>
               </div>
             </div>
+            <input
+              type="file"
+              accept=".pdf,application/pdf"
+              className="hidden"
+              ref={fileInputRef}
+              onChange={handlePdfUpload}
+            />
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploadingPdf}
+                className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 dark:disabled:bg-indigo-800 text-white px-3 py-2 text-xs font-medium transition-colors"
+              >
+                {isUploadingPdf ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+                {isUploadingPdf ? 'Reading PDF...' : 'Upload PDF'}
+              </button>
+              <button
+                onClick={handleLoadDemoLibrary}
+                className="px-3 py-2 text-xs font-medium rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              >
+                Load demo
+              </button>
+            </div>
+            {uploadError && (
+              <div className="text-xs text-rose-600 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border border-rose-100 dark:border-rose-500/20 rounded-xl px-3 py-2">
+                {uploadError}
+              </div>
+            )}
             <div className="space-y-2">
               <input
                 type="text"
@@ -528,22 +591,16 @@ export default function App() {
                 <button
                   onClick={handleDiscoverPapers}
                   disabled={isDiscovering || !discoverQuery.trim()}
-                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 dark:disabled:bg-indigo-800 text-white transition-colors"
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 dark:bg-slate-100 dark:hover:bg-slate-200 dark:text-slate-900 dark:disabled:bg-slate-700 text-white transition-colors"
                 >
                   {isDiscovering ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
                   {isDiscovering ? 'Searching...' : 'Fetch from Crossref'}
-                </button>
-                <button
-                  onClick={handleLoadDemoLibrary}
-                  className="px-3 py-2 text-xs font-medium rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                >
-                  Load demo
                 </button>
               </div>
             </div>
           </div>
           
-          <div className="flex gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <button
               onClick={handleExport}
               disabled={papers.length === 0}
@@ -567,6 +624,7 @@ export default function App() {
               Import
             </button>
           </div>
+        </div>
         </div>
       </div>
 
@@ -596,7 +654,13 @@ export default function App() {
                     </div>
                     {selectedPaper.source && (
                       <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-300">
-                        {selectedPaper.source === 'demo' ? 'Demo library' : selectedPaper.source === 'crossref' ? 'Crossref metadata' : 'Imported JSON'}
+                        {selectedPaper.source === 'demo'
+                          ? 'Demo library'
+                          : selectedPaper.source === 'crossref'
+                            ? 'Crossref metadata'
+                            : selectedPaper.source === 'uploaded'
+                              ? 'Uploaded PDF'
+                              : 'Imported JSON'}
                       </div>
                     )}
                     {typeof selectedPaper.citationCount === 'number' && selectedPaper.citationCount > 0 && (
@@ -720,7 +784,7 @@ export default function App() {
                 <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-2">No Paper Selected</h2>
                 <p className="text-slate-500 dark:text-slate-400 max-w-sm">
                   {papers.length === 0
-                    ? 'Load the demo library, fetch public papers, or import JSON to explore the showcase.'
+                    ? 'Upload a PDF, load the demo library, fetch public papers, or import JSON to explore the showcase.'
                     : 'Select a paper from the sidebar to view its summary, gaps, and future directions.'}
                 </p>
               </div>
@@ -878,7 +942,7 @@ export default function App() {
                 {chatMessages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 dark:text-slate-400">
                     <MessageSquare className="w-12 h-12 mb-4 text-slate-300 dark:text-slate-600" />
-                    <p>{papers.length === 0 ? 'Load the demo library or add public papers to start exploring.' : 'Ask anything about the papers in your library.'}</p>
+                    <p>{papers.length === 0 ? 'Upload a PDF, load the demo library, or add public papers to start exploring.' : 'Ask anything about the papers in your library.'}</p>
                     <p className="text-sm mt-2">
                       {papers.length === 0
                         ? 'This demo answers from the metadata, summaries, tags, and gaps stored in the app.'
@@ -924,7 +988,7 @@ export default function App() {
                     type="text"
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
-                    placeholder={papers.length === 0 ? "Load the demo library, fetch public papers, or import JSON first..." : "Ask a question..."}
+                    placeholder={papers.length === 0 ? "Upload a PDF, load the demo library, fetch public papers, or import JSON first..." : "Ask a question..."}
                     disabled={papers.length === 0 || isChatting}
                     className="w-full pl-4 pr-12 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 disabled:opacity-50"
                   />
@@ -951,7 +1015,7 @@ export default function App() {
               <div className="flex-1 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-slate-50 dark:bg-slate-950 relative">
                 {papers.length === 0 ? (
                   <div className="absolute inset-0 flex items-center justify-center text-slate-500 dark:text-slate-400">
-                    Load the demo library or fetch public papers to build the graph.
+                    Upload a PDF, load the demo library, or fetch public papers to build the graph.
                   </div>
                 ) : (
                   <ForceGraph2D

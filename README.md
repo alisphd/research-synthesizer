@@ -1,6 +1,6 @@
 # Research Synth
 
-Research Synth is a literature review showcase app for building a personal research library in the browser. It ships with a demo collection, lets you fetch public paper metadata from Crossref, generates local synthesis and chat responses from stored notes, and supports JSON import/export for moving your data anywhere.
+Research Synth is a literature review showcase app for building a personal research library in the browser. It supports local PDF upload and extraction, ships with a demo collection, lets you fetch public paper metadata from Crossref, generates local synthesis and chat responses from stored notes, and supports JSON import/export for moving your data anywhere.
 
 ## Current behavior
 
@@ -8,6 +8,7 @@ Research Synth is a literature review showcase app for building a personal resea
 - No cloud sync
 - No private API key required
 - Library stays in the current browser using local storage
+- Can upload PDFs for local text extraction and heuristic analysis
 - Includes a built-in demo library for quick showcase use
 - Can discover public paper metadata from Crossref
 - Full JSON import/export for backup and sharing
@@ -16,6 +17,7 @@ Research Synth is a literature review showcase app for building a personal resea
 
 - React 19 + TypeScript + Vite
 - Tailwind CSS
+- PDF.js (`pdfjs-dist`) for local PDF text extraction
 - Crossref public API for metadata discovery
 - Recharts + `react-force-graph-2d`
 
@@ -30,7 +32,7 @@ Research Synth is a literature review showcase app for building a personal resea
    npm run dev
    ```
 3. Open the app in your browser.
-4. Load the demo library, search Crossref, or import a JSON library file.
+4. Upload a PDF, load the demo library, search Crossref, or import a JSON library file.
 
 ## Deploy to GitHub Pages
 
@@ -45,6 +47,7 @@ If you fork or rename the repo, the workflow automatically builds with the corre
 ## Notes
 
 - All data stays in the current browser until cleared or replaced.
+- Uploaded PDFs are parsed locally in the browser and turned into heuristic paper records without sending private content to a server.
 - Demo synthesis and chat are generated from the metadata, summaries, tags, gaps, and future-direction notes stored in the app.
-- Crossref results provide public metadata, not full-text article ingestion.
+- Crossref results provide public metadata, while uploaded PDFs provide local text-based extraction.
 - Use Export regularly if you want portable backups of your library.

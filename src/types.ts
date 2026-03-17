@@ -11,7 +11,7 @@ export interface PaperAnalysis {
   tags: string[];
   doi?: string;
   url?: string;
-  source?: 'demo' | 'crossref' | 'imported';
+  source?: 'demo' | 'crossref' | 'imported' | 'uploaded';
   citationCount?: number;
   createdAt?: any;
 }
