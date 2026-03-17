@@ -9,5 +9,9 @@ export interface PaperAnalysis {
   gaps: string[];
   futureDirections: string[];
   tags: string[];
+  doi?: string;
+  url?: string;
+  source?: 'demo' | 'crossref' | 'imported';
+  citationCount?: number;
   createdAt?: any;
 }

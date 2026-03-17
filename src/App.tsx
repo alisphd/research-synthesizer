@@ -1,10 +1,9 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Upload, FileText, BrainCircuit, Trash2, Loader2, ChevronRight, BookOpen, Sparkles, Moon, Sun, Menu, X, Download, UploadCloud, Database, Target, MessageSquare, Network, Search, Tag, Quote, Send } from 'lucide-react';
+import { FileText, BrainCircuit, Trash2, Loader2, ChevronRight, BookOpen, Sparkles, Moon, Sun, Menu, X, Download, UploadCloud, Database, Target, MessageSquare, Network, Search, Tag, Quote, Send, ExternalLink, Plus } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { PaperAnalysis } from './types';
 import { getStoredLibrary, saveLibrary } from './lib/libraryStorage';
-import { analyzePaper, synthesizeDomain, chatWithLibrary } from './services/gemini';
-import { clearGeminiApiKey, getStoredGeminiApiKey, maskGeminiApiKey, saveGeminiApiKey } from './lib/geminiKey';
+import { chatWithLibrary, getDemoLibrary, searchPublicPapers, synthesizeDomain } from './services/researchService';
 import { cn } from './lib/utils';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import ForceGraph2D from 'react-force-graph-2d';
@@ -12,12 +11,15 @@ import ForceGraph2D from 'react-force-graph-2d';
 export default function App() {
   const [papers, setPapers] = useState<PaperAnalysis[]>(() => getStoredLibrary());
   const [activeTab, setActiveTab] = useState<'papers' | 'metadata' | 'gaps' | 'synthesis' | 'chat' | 'graph'>('papers');
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isDiscovering, setIsDiscovering] = useState(false);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [synthesisResult, setSynthesisResult] = useState<string | null>(null);
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [discoverQuery, setDiscoverQuery] = useState('transformer attention');
+  const [discoverResults, setDiscoverResults] = useState<PaperAnalysis[]>([]);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
   
   // Search and Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -27,12 +29,8 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<{role: 'user' | 'assistant', content: string}[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
-  const [geminiApiKey, setGeminiApiKey] = useState(() => getStoredGeminiApiKey());
-  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState(() => getStoredGeminiApiKey());
-  const [isEditingGeminiKey, setIsEditingGeminiKey] = useState(() => !getStoredGeminiApiKey());
   const chatEndRef = useRef<HTMLDivElement>(null);
   
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -53,86 +51,65 @@ export default function App() {
     saveLibrary(papers);
   }, [papers]);
 
-  const hasGeminiApiKey = geminiApiKey.trim().length > 0;
-
-  const ensureGeminiApiKey = () => {
-    if (hasGeminiApiKey) {
-      return true;
-    }
-
-    setIsEditingGeminiKey(true);
-    alert('Add your Gemini API key to use paper analysis, chat, and synthesis. It is stored only in this browser.');
-    return false;
-  };
-
-  const handleSaveGeminiKey = () => {
-    const trimmedApiKey = geminiApiKeyInput.trim();
-
-    if (!trimmedApiKey) {
-      alert('Enter a Gemini API key before saving.');
-      return;
-    }
-
-    saveGeminiApiKey(trimmedApiKey);
-    setGeminiApiKey(trimmedApiKey);
-    setGeminiApiKeyInput(trimmedApiKey);
-    setIsEditingGeminiKey(false);
-  };
-
-  const handleClearGeminiKey = () => {
-    clearGeminiApiKey();
-    setGeminiApiKey('');
-    setGeminiApiKeyInput('');
-    setIsEditingGeminiKey(true);
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!ensureGeminiApiKey()) {
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    setIsAnalyzing(true);
-    try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        try {
-          const base64 = (reader.result as string).split(',')[1];
-          const analysis = await analyzePaper(geminiApiKey, base64, file.type);
-          
-          const newPaper: PaperAnalysis = {
-            id: Math.random().toString(36).substring(2, 15),
-            ...analysis,
-          };
-
-          setPapers(prev => [newPaper, ...prev]);
-          
-          setSelectedPaperId(newPaper.id);
-          setActiveTab('papers');
-        } catch (error) {
-          console.error("Error analyzing paper:", error);
-          alert("Failed to analyze paper. See console for details.");
-        } finally {
-          setIsAnalyzing(false);
-          if (fileInputRef.current) fileInputRef.current.value = '';
+  const mergePapers = (incoming: PaperAnalysis[]) => {
+    setPapers((prev) => {
+      const merged = [...incoming, ...prev];
+      const seen = new Set<string>();
+      return merged.filter((paper) => {
+        if (seen.has(paper.id)) {
+          return false;
         }
-      };
-      reader.readAsDataURL(file);
+
+        seen.add(paper.id);
+        return true;
+      });
+    });
+  };
+
+  const addPaperToLibrary = (paper: PaperAnalysis) => {
+    mergePapers([paper]);
+    setSelectedPaperId(paper.id);
+    setActiveTab('papers');
+    setSynthesisResult(null);
+    setDiscoverResults((prev) => prev.filter((item) => item.id !== paper.id));
+  };
+
+  const handleLoadDemoLibrary = () => {
+    const demoPapers = getDemoLibrary();
+    mergePapers(demoPapers);
+    setSelectedPaperId((current) => current ?? demoPapers[0]?.id ?? null);
+    setActiveTab('papers');
+    setSynthesisResult(null);
+    setDiscoverResults([]);
+    setDiscoverError(null);
+  };
+
+  const handleDiscoverPapers = async () => {
+    if (!discoverQuery.trim()) {
+      return;
+    }
+
+    setIsDiscovering(true);
+    setDiscoverError(null);
+    try {
+      const results = await searchPublicPapers(discoverQuery);
+      const existingIds = new Set(papers.map((paper) => paper.id));
+      setDiscoverResults(results.filter((paper) => !existingIds.has(paper.id)));
+      setActiveTab('papers');
     } catch (error) {
-      console.error("Error reading file:", error);
-      setIsAnalyzing(false);
+      console.error('Error fetching public papers:', error);
+      setDiscoverError('Could not fetch papers right now. Please try another topic or load the demo library.');
+    } finally {
+      setIsDiscovering(false);
     }
   };
 
   const handleSynthesize = async () => {
     if (papers.length === 0) return;
-    if (!ensureGeminiApiKey()) return;
     setIsSynthesizing(true);
     setActiveTab('synthesis');
     try {
-      const result = await synthesizeDomain(geminiApiKey, papers);
+      const result = await synthesizeDomain(papers);
       setSynthesisResult(result);
     } catch (error) {
       console.error("Error synthesizing domain:", error);
@@ -169,9 +146,9 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const importedPapers = JSON.parse(event.target?.result as string);
+        const importedPapers = JSON.parse(event.target?.result as string) as PaperAnalysis[];
         if (Array.isArray(importedPapers)) {
-          setPapers(importedPapers);
+          setPapers(importedPapers.map((paper) => ({ ...paper, source: paper.source ?? 'imported' })));
           setSynthesisResult(null);
           setSelectedPaperId(null);
         }
@@ -186,7 +163,6 @@ export default function App() {
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || papers.length === 0) return;
-    if (!ensureGeminiApiKey()) return;
 
     const userMsg = chatInput;
     setChatInput('');
@@ -194,7 +170,7 @@ export default function App() {
     setIsChatting(true);
 
     try {
-      const response = await chatWithLibrary(geminiApiKey, papers, userMsg);
+      const response = await chatWithLibrary(papers, userMsg);
       setChatMessages(prev => [...prev, { role: 'assistant', content: response }]);
     } catch (error) {
       console.error("Chat error:", error);
@@ -258,9 +234,11 @@ export default function App() {
     .sort((a, b) => a.year.localeCompare(b.year));
 
   const allGaps = papers.flatMap(p => (p.gaps || []).map(gap => ({ paperTitle: p.title, gap, year: p.year })));
+  const focusedShellClass = 'w-full max-w-[1280px] mx-auto p-4 pt-20 md:px-6 md:pt-8 xl:px-10';
+  const wideShellClass = 'w-full max-w-[1500px] mx-auto p-4 pt-20 md:px-6 md:pt-8 xl:px-10';
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors duration-200">
+    <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950 overflow-x-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors duration-200 md:h-screen md:overflow-hidden">
       
       {/* Mobile Floating Menu Button */}
       {!isMobileMenuOpen && (
@@ -274,7 +252,7 @@ export default function App() {
 
       {/* Sidebar */}
       <div className={cn(
-        "fixed md:static inset-y-0 left-0 w-80 shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-xl md:shadow-none z-40 transition-transform duration-300 ease-in-out md:translate-x-0",
+        "fixed md:static inset-y-0 left-0 w-full max-w-[22rem] md:max-w-none md:w-[22rem] xl:w-[24rem] shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-xl md:shadow-none z-40 transition-transform duration-300 ease-in-out md:translate-x-0",
         isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="flex p-6 border-b border-slate-100 dark:border-slate-800 justify-between items-start">
@@ -297,9 +275,9 @@ export default function App() {
 
         <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800">
           <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 px-4 py-3">
-            <p className="text-sm font-medium text-slate-900 dark:text-slate-100">Local library mode</p>
+            <p className="text-sm font-medium text-slate-900 dark:text-slate-100">Showcase mode</p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              No sign-in required. Upload papers, then use JSON import/export to move your library between devices.
+              No sign-in or private API keys. Load the demo library, fetch public paper metadata from Crossref, or use JSON import/export.
             </p>
           </div>
         </div>
@@ -432,12 +410,52 @@ export default function App() {
                 )}
               </div>
 
+              {(discoverResults.length > 0 || discoverError) && (
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-2">
+                    Discover Results
+                  </div>
+                  {discoverError && (
+                    <div className="text-xs text-rose-600 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border border-rose-100 dark:border-rose-500/20 rounded-xl px-3 py-2">
+                      {discoverError}
+                    </div>
+                  )}
+                  {discoverResults.map((paper) => (
+                    <div
+                      key={paper.id}
+                      className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/70 px-3 py-3 space-y-2"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center shrink-0">
+                          <Search className="w-4 h-4 text-indigo-500 dark:text-indigo-300" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-slate-900 dark:text-slate-100 leading-snug">
+                            {paper.title}
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                            {paper.year} · {paper.journal}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => addPaperToLibrary(paper)}
+                        className="w-full flex items-center justify-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 text-xs font-medium transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add to library
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3 px-2">
                 Added Papers ({filteredPapers.length})
               </div>
               {filteredPapers.length === 0 ? (
                 <div className="text-sm text-slate-500 dark:text-slate-400 text-center py-8 px-4 border border-dashed border-slate-200 dark:border-slate-700 rounded-xl">
-                  {papers.length === 0 ? "No papers added yet. Upload a PDF to begin." : "No papers match your search."}
+                  {papers.length === 0 ? "No papers yet. Load the demo library, fetch Crossref results, or import JSON to begin." : "No papers match your search."}
                 </div>
               ) : (
                 filteredPapers.map(paper => (
@@ -492,89 +510,38 @@ export default function App() {
           <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Gemini API key</p>
+                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Discover papers</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  {hasGeminiApiKey
-                    ? `Key ${maskGeminiApiKey(geminiApiKey)}. Stored only in this browser.`
-                    : 'Required for paper analysis, synthesis, and chat. Stored only in this browser.'}
+                  Search Crossref for public research metadata and add matching papers to the showcase library.
                 </p>
               </div>
-              {!isEditingGeminiKey && (
-                <button
-                  onClick={() => setIsEditingGeminiKey(true)}
-                  className="shrink-0 px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                >
-                  Edit
-                </button>
-              )}
             </div>
-
-            {isEditingGeminiKey ? (
-              <div className="space-y-2">
-                <input
-                  type="password"
-                  value={geminiApiKeyInput}
-                  onChange={(e) => setGeminiApiKeyInput(e.target.value)}
-                  placeholder="Paste your Gemini API key"
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleSaveGeminiKey}
-                    className="flex-1 px-3 py-2 text-xs font-medium rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
-                  >
-                    Save key
-                  </button>
-                  {hasGeminiApiKey && (
-                    <button
-                      onClick={() => {
-                        setGeminiApiKeyInput(geminiApiKey);
-                        setIsEditingGeminiKey(false);
-                      }}
-                      className="px-3 py-2 text-xs font-medium rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={discoverQuery}
+                onChange={(e) => setDiscoverQuery(e.target.value)}
+                placeholder="Try: transformers, glaucoma, climate adaptation"
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleDiscoverPapers}
+                  disabled={isDiscovering || !discoverQuery.trim()}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 dark:disabled:bg-indigo-800 text-white transition-colors"
+                >
+                  {isDiscovering ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                  {isDiscovering ? 'Searching...' : 'Fetch from Crossref'}
+                </button>
+                <button
+                  onClick={handleLoadDemoLibrary}
+                  className="px-3 py-2 text-xs font-medium rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                >
+                  Load demo
+                </button>
               </div>
-            ) : (
-              <button
-                onClick={handleClearGeminiKey}
-                className="w-full px-3 py-2 text-xs font-medium rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-              >
-                Clear saved key
-              </button>
-            )}
+            </div>
           </div>
-
-          <input
-            type="file"
-            accept="application/pdf, text/plain"
-            className="hidden"
-            ref={fileInputRef}
-            onChange={handleFileUpload}
-          />
-          <button
-            onClick={() => {
-              if (!ensureGeminiApiKey()) return;
-              fileInputRef.current?.click();
-            }}
-            disabled={isAnalyzing}
-            className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 dark:disabled:bg-indigo-800 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-sm"
-          >
-            {isAnalyzing ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Analyzing...
-              </>
-            ) : (
-              <>
-                <Upload className="w-4 h-4" />
-                Upload Paper
-              </>
-            )}
-          </button>
           
           <div className="flex gap-2">
             <button
@@ -612,13 +579,13 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto bg-slate-50/50 dark:bg-slate-950/50">
+      <div className="flex-1 min-w-0 overflow-y-auto bg-slate-50/50 dark:bg-slate-950/50">
         
         {/* PAPERS TAB */}
         {activeTab === 'papers' && (
-          <div className="max-w-4xl mx-auto p-4 pt-20 md:p-8">
+          <div className={focusedShellClass}>
             {selectedPaper ? (
-              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 md:p-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 p-5 sm:p-6 lg:p-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div className="mb-8">
                   <div className="flex flex-wrap gap-2 mb-4">
                     <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 dark:bg-indigo-500/20 text-indigo-800 dark:text-indigo-300">
@@ -627,6 +594,16 @@ export default function App() {
                     <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-300">
                       {selectedPaper.journal}
                     </div>
+                    {selectedPaper.source && (
+                      <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-300">
+                        {selectedPaper.source === 'demo' ? 'Demo library' : selectedPaper.source === 'crossref' ? 'Crossref metadata' : 'Imported JSON'}
+                      </div>
+                    )}
+                    {typeof selectedPaper.citationCount === 'number' && selectedPaper.citationCount > 0 && (
+                      <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300">
+                        {selectedPaper.citationCount} citation{selectedPaper.citationCount === 1 ? '' : 's'}
+                      </div>
+                    )}
                     {selectedPaper.tags?.map(tag => (
                       <div key={tag} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300">
                         <Tag className="w-3 h-3 mr-1" />
@@ -634,22 +611,51 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  <div className="flex items-start justify-between gap-4">
-                    <h2 className="text-2xl md:text-3xl font-serif font-bold text-slate-900 dark:text-slate-100 leading-tight mb-4">
-                      {selectedPaper.title}
-                    </h2>
-                    <button
-                      onClick={() => generateCitation(selectedPaper)}
-                      className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-xs font-medium transition-colors"
-                      title="Copy Citation"
-                    >
-                      <Quote className="w-3.5 h-3.5" />
-                      Cite
-                    </button>
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <h2 className="text-2xl md:text-3xl font-serif font-bold text-slate-900 dark:text-slate-100 leading-tight">
+                        {selectedPaper.title}
+                      </h2>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      {selectedPaper.url && (
+                        <a
+                          href={selectedPaper.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-xs font-medium transition-colors border border-slate-200 dark:border-slate-700"
+                          title="Open source record"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          Source
+                        </a>
+                      )}
+                      <button
+                        onClick={() => generateCitation(selectedPaper)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-xs font-medium transition-colors"
+                        title="Copy Citation"
+                      >
+                        <Quote className="w-3.5 h-3.5" />
+                        Cite
+                      </button>
+                    </div>
                   </div>
-                  <p className="text-sm text-slate-600 dark:text-slate-400">
+                  <p className="mt-4 text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
                     <span className="font-semibold">Authors:</span> {selectedPaper.authors?.join(', ') || 'Unknown'}
                   </p>
+                  {selectedPaper.doi && (
+                    <p className="mt-2 text-sm text-slate-500 dark:text-slate-400 break-all">
+                      <span className="font-semibold text-slate-600 dark:text-slate-300">DOI:</span>{' '}
+                      <a
+                        href={`https://doi.org/${selectedPaper.doi}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-indigo-600 hover:text-indigo-700 dark:text-indigo-300 dark:hover:text-indigo-200"
+                      >
+                        {selectedPaper.doi}
+                      </a>
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-8">
@@ -713,7 +719,9 @@ export default function App() {
                 </div>
                 <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-2">No Paper Selected</h2>
                 <p className="text-slate-500 dark:text-slate-400 max-w-sm">
-                  Select a paper from the sidebar to view its extracted findings, gaps, and future directions.
+                  {papers.length === 0
+                    ? 'Load the demo library, fetch public papers, or import JSON to explore the showcase.'
+                    : 'Select a paper from the sidebar to view its summary, gaps, and future directions.'}
                 </p>
               </div>
             )}
@@ -722,7 +730,7 @@ export default function App() {
 
         {/* METADATA TAB */}
         {activeTab === 'metadata' && (
-          <div className="max-w-6xl mx-auto p-4 pt-20 md:p-8">
+          <div className={wideShellClass}>
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 md:p-8">
               <h2 className="text-2xl font-serif font-bold text-slate-900 dark:text-slate-100 mb-6">Metadata & Statistics</h2>
               
@@ -776,7 +784,7 @@ export default function App() {
 
         {/* GAPS TAB */}
         {activeTab === 'gaps' && (
-          <div className="max-w-6xl mx-auto p-4 pt-20 md:p-8">
+          <div className={wideShellClass}>
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 md:p-8">
               <h2 className="text-2xl font-serif font-bold text-slate-900 dark:text-slate-100 mb-2">Research Gaps Dashboard</h2>
               <p className="text-slate-500 dark:text-slate-400 mb-8">A consolidated view of all identified research gaps across your library.</p>
@@ -808,12 +816,12 @@ export default function App() {
 
         {/* SYNTHESIS TAB */}
         {activeTab === 'synthesis' && (
-          <div className="max-w-4xl mx-auto p-4 pt-20 md:p-8">
+          <div className={focusedShellClass}>
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 md:p-8 min-h-[600px]">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 pb-8 border-b border-slate-100 dark:border-slate-800">
                 <div>
                   <h2 className="text-2xl font-serif font-bold text-slate-900 dark:text-slate-100">Domain Synthesis</h2>
-                  <p className="text-slate-500 dark:text-slate-400 mt-1">Meta-analysis of {papers.length} accumulated papers</p>
+                  <p className="text-slate-500 dark:text-slate-400 mt-1">Showcase overview of {papers.length} papers in your current library</p>
                 </div>
                 <button
                   onClick={handleSynthesize}
@@ -837,7 +845,7 @@ export default function App() {
               {isSynthesizing ? (
                 <div className="flex flex-col items-center justify-center py-20 text-slate-500 dark:text-slate-400">
                   <Loader2 className="w-8 h-8 animate-spin text-indigo-500 mb-4" />
-                  <p>Analyzing {papers.length} papers to find cross-cutting themes...</p>
+                  <p>Reviewing {papers.length} papers to identify recurring themes and gaps...</p>
                 </div>
               ) : synthesisResult ? (
                 <div className="markdown-body">
@@ -850,7 +858,7 @@ export default function App() {
                   </div>
                   <h3 className="text-lg font-medium text-slate-900 dark:text-slate-100 mb-2">Ready to Synthesize</h3>
                   <p className="text-slate-500 dark:text-slate-400 max-w-md">
-                    Click "Generate Synthesis" to have AI analyze all your accumulated papers, identify common gaps, and map out the future trajectory of this domain.
+                    Generate a showcase synthesis from the summaries, tags, gaps, and notes already stored in your library.
                   </p>
                 </div>
               )}
@@ -859,19 +867,23 @@ export default function App() {
         )}
         {/* CHAT TAB */}
         {activeTab === 'chat' && (
-          <div className="max-w-4xl mx-auto p-4 pt-20 md:p-8 h-full flex flex-col">
-            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 flex flex-col h-[calc(100vh-8rem)]">
+          <div className={cn(focusedShellClass, 'min-h-[72vh] md:h-full flex flex-col')}>
+            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 flex flex-col min-h-[72vh] md:h-[calc(100vh-6rem)]">
               <div className="p-6 border-b border-slate-100 dark:border-slate-800">
                 <h2 className="text-2xl font-serif font-bold text-slate-900 dark:text-slate-100">Chat with your Library</h2>
-                <p className="text-slate-500 dark:text-slate-400 mt-1">Ask questions across {papers.length} accumulated papers.</p>
+                <p className="text-slate-500 dark:text-slate-400 mt-1">Ask questions across {papers.length} papers using the stored showcase metadata.</p>
               </div>
               
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {chatMessages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 dark:text-slate-400">
                     <MessageSquare className="w-12 h-12 mb-4 text-slate-300 dark:text-slate-600" />
-                    <p>Ask anything about the papers in your library.</p>
-                    <p className="text-sm mt-2">e.g., "What are the common limitations mentioned across these studies?"</p>
+                    <p>{papers.length === 0 ? 'Load the demo library or add public papers to start exploring.' : 'Ask anything about the papers in your library.'}</p>
+                    <p className="text-sm mt-2">
+                      {papers.length === 0
+                        ? 'This demo answers from the metadata, summaries, tags, and gaps stored in the app.'
+                        : 'For example: "What common limitations appear across these studies?"'}
+                    </p>
                   </div>
                 ) : (
                   chatMessages.map((msg, idx) => (
@@ -912,13 +924,13 @@ export default function App() {
                     type="text"
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
-                    placeholder={!hasGeminiApiKey ? "Add your Gemini API key to start chatting..." : papers.length === 0 ? "Upload papers to start chatting..." : "Ask a question..."}
-                    disabled={!hasGeminiApiKey || papers.length === 0 || isChatting}
+                    placeholder={papers.length === 0 ? "Load the demo library, fetch public papers, or import JSON first..." : "Ask a question..."}
+                    disabled={papers.length === 0 || isChatting}
                     className="w-full pl-4 pr-12 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 disabled:opacity-50"
                   />
                   <button
                     type="submit"
-                    disabled={!hasGeminiApiKey || !chatInput.trim() || papers.length === 0 || isChatting}
+                    disabled={!chatInput.trim() || papers.length === 0 || isChatting}
                     className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white rounded-lg transition-colors"
                   >
                     <Send className="w-4 h-4" />
@@ -931,7 +943,7 @@ export default function App() {
 
         {/* GRAPH TAB */}
         {activeTab === 'graph' && (
-          <div className="max-w-6xl mx-auto p-4 pt-20 md:p-8 h-full flex flex-col">
+          <div className={cn(wideShellClass, 'h-full flex flex-col')}>
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 md:p-8 flex-1 flex flex-col min-h-[600px]">
               <h2 className="text-2xl font-serif font-bold text-slate-900 dark:text-slate-100 mb-2">Knowledge Graph</h2>
               <p className="text-slate-500 dark:text-slate-400 mb-6">Visual connections between papers based on shared tags.</p>
@@ -939,7 +951,7 @@ export default function App() {
               <div className="flex-1 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-slate-50 dark:bg-slate-950 relative">
                 {papers.length === 0 ? (
                   <div className="absolute inset-0 flex items-center justify-center text-slate-500 dark:text-slate-400">
-                    No data to display. Upload papers to build the graph.
+                    Load the demo library or fetch public papers to build the graph.
                   </div>
                 ) : (
                   <ForceGraph2D
