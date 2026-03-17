@@ -1,32 +1,16 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Upload, FileText, BrainCircuit, Trash2, Loader2, ChevronRight, BookOpen, Sparkles, Moon, Sun, Menu, X, Download, UploadCloud, Database, Target, MessageSquare, Network, Search, Tag, Quote, Send, LogIn, LogOut } from 'lucide-react';
+import { Upload, FileText, BrainCircuit, Trash2, Loader2, ChevronRight, BookOpen, Sparkles, Moon, Sun, Menu, X, Download, UploadCloud, Database, Target, MessageSquare, Network, Search, Tag, Quote, Send } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { PaperAnalysis } from './types';
+import { getStoredLibrary, saveLibrary } from './lib/libraryStorage';
 import { analyzePaper, synthesizeDomain, chatWithLibrary } from './services/gemini';
-import { clearStoredFirebaseConfig, describeFirebaseConfig, formatFirebaseConfig, getStoredFirebaseConfig, parseFirebaseConfig, saveFirebaseConfig, type FirebaseRuntimeConfig } from './lib/firebaseConfig';
 import { clearGeminiApiKey, getStoredGeminiApiKey, maskGeminiApiKey, saveGeminiApiKey } from './lib/geminiKey';
 import { cn } from './lib/utils';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import ForceGraph2D from 'react-force-graph-2d';
-import { getFirebaseServices, signInWithGoogle, logout } from './firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { collection, doc, setDoc, deleteDoc, onSnapshot, serverTimestamp, query, orderBy } from 'firebase/firestore';
-
-function loadInitialFirebaseConfig() {
-  return getStoredFirebaseConfig();
-}
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
-  const [firebaseConfig, setFirebaseConfig] = useState<FirebaseRuntimeConfig | null>(loadInitialFirebaseConfig);
-  const [firebaseConfigInput, setFirebaseConfigInput] = useState(() => {
-    const storedFirebaseConfig = loadInitialFirebaseConfig();
-    return storedFirebaseConfig ? formatFirebaseConfig(storedFirebaseConfig) : '';
-  });
-  const [isEditingFirebaseConfig, setIsEditingFirebaseConfig] = useState(() => !loadInitialFirebaseConfig());
-  
-  const [papers, setPapers] = useState<PaperAnalysis[]>([]);
+  const [papers, setPapers] = useState<PaperAnalysis[]>(() => getStoredLibrary());
   const [activeTab, setActiveTab] = useState<'papers' | 'metadata' | 'gaps' | 'synthesis' | 'chat' | 'graph'>('papers');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
@@ -50,45 +34,6 @@ export default function App() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
-  const firebaseServices = useMemo(() => getFirebaseServices(firebaseConfig), [firebaseConfig]);
-  const auth = firebaseServices?.auth ?? null;
-  const db = firebaseServices?.db ?? null;
-
-  useEffect(() => {
-    if (!auth) {
-      setUser(null);
-      setPapers([]);
-      setIsAuthReady(true);
-      return;
-    }
-
-    setIsAuthReady(false);
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setIsAuthReady(true);
-      if (!currentUser) {
-        setPapers([]);
-      }
-    });
-    return () => unsubscribe();
-  }, [auth]);
-
-  useEffect(() => {
-    if (!isAuthReady || !user || !db) return;
-
-    const q = query(collection(db, `users/${user.uid}/papers`), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const loadedPapers = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as PaperAnalysis[];
-      setPapers(loadedPapers);
-    }, (error) => {
-      console.error("Firestore error:", error);
-    });
-
-    return () => unsubscribe();
-  }, [db, user, isAuthReady]);
 
   useEffect(() => {
     if (isDarkMode) {
@@ -104,67 +49,11 @@ export default function App() {
     }
   }, [chatMessages, activeTab]);
 
+  useEffect(() => {
+    saveLibrary(papers);
+  }, [papers]);
+
   const hasGeminiApiKey = geminiApiKey.trim().length > 0;
-  const hasFirebaseConfig = firebaseConfig !== null;
-
-  const ensureFirebaseConfig = () => {
-    if (hasFirebaseConfig) {
-      return true;
-    }
-
-    setIsEditingFirebaseConfig(true);
-    alert('Add your Firebase web config JSON to enable Google sign-in and cloud sync. It is stored only in this browser.');
-    return false;
-  };
-
-  const handleSaveFirebaseConfig = () => {
-    try {
-      const parsedConfig = parseFirebaseConfig(firebaseConfigInput);
-      saveFirebaseConfig(parsedConfig);
-      setFirebaseConfig(parsedConfig);
-      setFirebaseConfigInput(formatFirebaseConfig(parsedConfig));
-      setIsEditingFirebaseConfig(false);
-    } catch (error) {
-      console.error('Invalid Firebase config:', error);
-      alert('Invalid Firebase config JSON. Paste the Firebase web config plus firestoreDatabaseId.');
-    }
-  };
-
-  const handleClearFirebaseConfig = async () => {
-    try {
-      await logout(firebaseConfig);
-    } catch (error) {
-      console.error('Error signing out while clearing Firebase config', error);
-    }
-
-    clearStoredFirebaseConfig();
-    setFirebaseConfig(null);
-    setFirebaseConfigInput('');
-    setIsEditingFirebaseConfig(true);
-    setUser(null);
-    setPapers([]);
-  };
-
-  const handleSignIn = async () => {
-    if (!ensureFirebaseConfig()) {
-      return;
-    }
-
-    try {
-      await signInWithGoogle(firebaseConfig);
-    } catch (error) {
-      console.error('Error signing in with Google', error);
-      alert('Google sign-in failed. Check your Firebase config and authorized domains.');
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await logout(firebaseConfig);
-    } catch (error) {
-      console.error('Error signing out', error);
-    }
-  };
 
   const ensureGeminiApiKey = () => {
     if (hasGeminiApiKey) {
@@ -217,19 +106,8 @@ export default function App() {
             id: Math.random().toString(36).substring(2, 15),
             ...analysis,
           };
-          
-          if (user && db) {
-            try {
-              await setDoc(doc(db, `users/${user.uid}/papers`, newPaper.id), {
-                ...newPaper,
-                createdAt: serverTimestamp()
-              });
-            } catch (err) {
-              console.error("Error saving to Firestore:", err);
-            }
-          } else {
-            setPapers(prev => [newPaper, ...prev]);
-          }
+
+          setPapers(prev => [newPaper, ...prev]);
           
           setSelectedPaperId(newPaper.id);
           setActiveTab('papers');
@@ -266,16 +144,8 @@ export default function App() {
 
   const removePaper = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    
-    if (user && db) {
-      try {
-        await deleteDoc(doc(db, `users/${user.uid}/papers`, id));
-      } catch (err) {
-        console.error("Error deleting from Firestore:", err);
-      }
-    } else {
-      setPapers(prev => prev.filter(p => p.id !== id));
-    }
+
+    setPapers(prev => prev.filter(p => p.id !== id));
 
     if (selectedPaperId === id) {
       setSelectedPaperId(null);
@@ -301,20 +171,7 @@ export default function App() {
       try {
         const importedPapers = JSON.parse(event.target?.result as string);
         if (Array.isArray(importedPapers)) {
-          if (user && db) {
-            importedPapers.forEach(async (p) => {
-              try {
-                await setDoc(doc(db, `users/${user.uid}/papers`, p.id), {
-                  ...p,
-                  createdAt: serverTimestamp()
-                });
-              } catch (err) {
-                console.error("Error importing to Firestore:", err);
-              }
-            });
-          } else {
-            setPapers(importedPapers);
-          }
+          setPapers(importedPapers);
           setSynthesisResult(null);
           setSelectedPaperId(null);
         }
@@ -438,38 +295,13 @@ export default function App() {
           </div>
         </div>
 
-        {/* User Profile / Auth */}
-        <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          {user ? (
-            <div className="flex items-center gap-3 overflow-hidden">
-              {user.photoURL ? (
-                <img src={user.photoURL} alt="User" className="w-8 h-8 rounded-full" referrerPolicy="no-referrer" />
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center text-indigo-600 dark:text-indigo-400 font-bold text-sm">
-                  {user.email?.[0].toUpperCase()}
-                </div>
-              )}
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">{user.displayName || 'User'}</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{user.email}</p>
-              </div>
-            </div>
-          ) : (
-            <div className="text-sm text-slate-600 dark:text-slate-400">
-              {hasFirebaseConfig ? 'Sign in to sync papers' : 'Add Firebase config to sync papers'}
-            </div>
-          )}
-          
-          {user ? (
-            <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-500 rounded-full hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors" title="Sign Out">
-              <LogOut className="w-4 h-4" />
-            </button>
-          ) : (
-            <button onClick={handleSignIn} className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 rounded-lg text-sm font-medium transition-colors">
-              <LogIn className="w-4 h-4" />
-              {hasFirebaseConfig ? 'Sign In' : 'Set Up'}
-            </button>
-          )}
+        <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800">
+          <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 px-4 py-3">
+            <p className="text-sm font-medium text-slate-900 dark:text-slate-100">Local library mode</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              No sign-in required. Upload papers, then use JSON import/export to move your library between devices.
+            </p>
+          </div>
         </div>
 
         <div className="p-4 flex flex-col gap-2">
@@ -657,64 +489,6 @@ export default function App() {
         </div>
 
         <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 space-y-3">
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 space-y-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Firebase config</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  {firebaseConfig
-                    ? `Cloud sync ready for ${describeFirebaseConfig(firebaseConfig)}. Stored only in this browser.`
-                    : 'Paste your Firebase web config JSON to enable Google sign-in and cloud sync. Stored only in this browser.'}
-                </p>
-              </div>
-              {!isEditingFirebaseConfig && (
-                <button
-                  onClick={() => setIsEditingFirebaseConfig(true)}
-                  className="shrink-0 px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                >
-                  Edit
-                </button>
-              )}
-            </div>
-
-            {isEditingFirebaseConfig ? (
-              <div className="space-y-2">
-                <textarea
-                  value={firebaseConfigInput}
-                  onChange={(e) => setFirebaseConfigInput(e.target.value)}
-                  placeholder={`{\n  "projectId": "...",\n  "appId": "...",\n  "apiKey": "...",\n  "authDomain": "...",\n  "firestoreDatabaseId": "...",\n  "storageBucket": "...",\n  "messagingSenderId": "..."\n}`}
-                  className="w-full min-h-32 px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleSaveFirebaseConfig}
-                    className="flex-1 px-3 py-2 text-xs font-medium rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
-                  >
-                    Save config
-                  </button>
-                  {hasFirebaseConfig && (
-                    <button
-                      onClick={() => {
-                        setFirebaseConfigInput(firebaseConfig ? formatFirebaseConfig(firebaseConfig) : '');
-                        setIsEditingFirebaseConfig(false);
-                      }}
-                      className="px-3 py-2 text-xs font-medium rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={handleClearFirebaseConfig}
-                className="w-full px-3 py-2 text-xs font-medium rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-              >
-                Clear saved config
-              </button>
-            )}
-          </div>
-
           <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div>
