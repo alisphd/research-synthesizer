@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users/{userId}/papers
+    // Document ID: {paperId}
+    // Fields:
+    //   - id: string (required)
+    //   - title: string (required, < 1000 chars)
+    //   - authors: list (required, < 100 items)
+    //   - year: string (required, < 10 chars)
+    //   - journal: string (required, < 500 chars)
+    //   - summary: string (required, < 10000 chars)
+    //   - uniqueFindings: list (required, < 100 items)
+    //   - gaps: list (required, < 100 items)
+    //   - futureDirections: list (required, < 100 items)
+    //   - tags: list (required, < 50 items)
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    function isValidStringArray(field, maxItems) {
+      let arr = request.resource.data[field];
+      return arr is list && arr.size() <= maxItems;
+    }
+
+    function isValidPaper() {
+      let requiredFields = ['id', 'title', 'authors', 'year', 'journal', 'summary', 'uniqueFindings', 'gaps', 'futureDirections', 'tags', 'createdAt'];
+      
+      return hasRequiredFields(requiredFields) &&
+             hasOnlyAllowedFields(requiredFields) &&
+             validStringLength('id', 1, 100) &&
+             validStringLength('title', 1, 1000) &&
+             validStringLength('year', 1, 10) &&
+             validStringLength('journal', 1, 500) &&
+             validStringLength('summary', 1, 10000) &&
+             isValidStringArray('authors', 100) &&
+             isValidStringArray('uniqueFindings', 100) &&
+             isValidStringArray('gaps', 100) &&
+             isValidStringArray('futureDirections', 100) &&
+             isValidStringArray('tags', 50) &&
+             request.resource.data.createdAt is timestamp;
+    }
+
+    function isCreatedAtUnchanged() {
+      return request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    match /users/{userId}/papers/{paperId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidPaper();
+      allow update: if isOwner(userId) && isValidPaper() && isCreatedAtUnchanged();
+      allow delete: if isOwner(userId);
+    }
+  }
+}
